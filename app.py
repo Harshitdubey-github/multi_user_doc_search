@@ -63,9 +63,9 @@ def initialize_chain():
 
         retriever = load_faiss_index()
         
-        # Updated to use Gemini model with error handling
+        # Use gemini-pro model
         llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",  # Changed from gemini-1.5-pro to gemini-pro
+            model="gemini-1.5-flash",
             google_api_key=api_key,
             temperature=0.7
         )
@@ -73,7 +73,8 @@ def initialize_chain():
         chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
             retriever=retriever,
-            return_source_documents=True
+            return_source_documents=True,
+            verbose=True  # Add this for debugging
         )
         return chain
     except Exception as e:
@@ -91,7 +92,7 @@ def initialize_session_state():
         st.session_state["conversation_history"] = []
 
 def main():
-    st.title("Multi-User Document Search & Conversational Q&A")
+    st.title("Multi-User Document Search & Conversational Q&A - By Harshit")
 
     initialize_session_state()
 
@@ -142,21 +143,56 @@ def show_search_interface():
                 del st.session_state[key]
             st.rerun()
         return
-        
-    user_query = st.text_input("Your question:")
-    if st.button("Ask"):
-        if user_query.strip() == "":
-            st.warning("Please enter a question.")
-        else:
-            handle_user_query(user_query)
+    
+    # Add clear conversation button
+    col1, col2 = st.columns([4, 1])
+    with col2:
+        if st.button("Clear Conversation"):
+            st.session_state["conversation_history"] = []
+            st.rerun()
+    
+    # Chat interface
+    with col1:
+        user_query = st.text_input("Your question:")
+        if st.button("Ask") or (user_query and user_query.strip() != "" and st.session_state.get("last_query") != user_query):
+            if user_query.strip() == "":
+                st.warning("Please enter a question.")
+            else:
+                st.session_state["last_query"] = user_query
+                handle_user_query(user_query)
 
-    # Display conversation history
+    # Display conversation history in a chat-like interface
     if st.session_state["conversation_history"]:
-        st.write("### Conversation History")
-        for i, (q, ans) in enumerate(st.session_state["conversation_history"]):
-            st.markdown(f"**Q{i+1}:** {q}")
-            st.markdown(f"**A{i+1}:** {ans}")
-            st.write("---")
+        st.write("### Conversation")
+        for i, (question, answer) in enumerate(st.session_state["conversation_history"]):
+            # User message
+            st.markdown(
+                f"""
+                <div style="background-color: #e6f3ff; padding: 10px; border-radius: 10px; margin: 5px 0;">
+                    <b>You:</b><br>{question}
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+            
+            # Assistant message
+            # Split answer into main response and sources if present
+            main_answer = answer.split("\n\nSources:")[0]
+            sources = answer.split("\n\nSources:")[1] if "\n\nSources:" in answer else ""
+            
+            st.markdown(
+                f"""
+                <div style="background-color: #f0f0f0; padding: 10px; border-radius: 10px; margin: 5px 0;">
+                    <b>Assistant:</b><br>{main_answer}
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+            
+            # Display sources in collapsible section if present
+            if sources:
+                with st.expander("View Sources"):
+                    st.markdown(sources)
 
 def handle_user_query(user_query):
     chain = st.session_state["chain"]
@@ -164,13 +200,36 @@ def handle_user_query(user_query):
         st.error("Chain is not initialized. Please log in again.")
         return
     
-    # Run the query through LangChain
-    result = chain({"question": user_query, "chat_history": st.session_state["conversation_history"]})
-    answer = result["answer"]
-    
-    # Save to conversation history
-    st.session_state["conversation_history"].append((user_query, answer))
-    st.success(answer)
+    try:
+        # Format chat history as tuples of (human, ai) messages
+        chat_history = [(q, a) for q, a in st.session_state["conversation_history"]]
+        
+        # Use invoke with properly formatted chat history
+        result = chain.invoke({
+            "question": user_query,
+            "chat_history": chat_history  # Pass as list of tuples
+        })
+        
+        # Extract answer and source documents
+        answer = result.get("answer", "Sorry, I couldn't find an answer.")
+        source_docs = result.get("source_documents", [])
+        
+        # Format source citations
+        if source_docs:
+            source_text = "\n\nSources:\n"
+            for i, doc in enumerate(source_docs, 1):
+                source_text += f"{i}. {doc.page_content[:150]}...\n"
+            answer += source_text
+        
+        # Add to conversation history
+        st.session_state["conversation_history"].append((user_query, answer))
+        
+        # Display the current answer
+        st.write("### Answer:")
+        st.write(answer)
+                
+    except Exception as e:
+        st.error(f"Error processing query: {str(e)}")
 
 if __name__ == "__main__":
     main()

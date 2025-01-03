@@ -1,19 +1,21 @@
-Setup:
+# Document Q&A System with Gemini
 
-Clone the repo.
-pip install -r requirements.txt.
-Place or confirm sample PDFs in data/.
-Update docs_config.json with your own user-to-company mappings if desired.
-Build Index:
+A multi-user document search and conversational Q&A system using Google's Gemini model.
 
-python preprocess.py to generate FAISS indexes for the sample PDFs.
-Run App:
+## Setup
 
-streamlit run app.py
-Usage:
+1. Clone the repository
+2. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+3. Create a `.env` file with your Gemini API key:
+   ```
+   GEMINI_API_KEY=your_api_key_here
+   ```
+4. Place your PDF documents in the `data/` directory
+5. Configure user access in `docs_config.json` by mapping email addresses to allowed company documents
 
-Enter a valid email from docs_config.json.
-Ask questions and see the relevant excerpts.
-Notes:
+## Building the Index
 
-This is a simplified demonstration. Real-world usage would incorporate robust user authentication, database connections, and possibly an LLM to refine answers.
+Run the preprocessing script to generate FAISS indexes for your PDFs:
