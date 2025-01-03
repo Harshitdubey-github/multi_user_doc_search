@@ -1,5 +1,5 @@
 {
     "alice@email.com": ["KRN"],
-    "bob@email.com": ["CompanyB", "CompanyC"],
-    "charlie@email.com": ["CompanyD", "CompanyE"]
+    "bob@email.com": ["KRN", "Zomato"],
+    "charlie@email.com": ["KRN", "Eicher"]
 }

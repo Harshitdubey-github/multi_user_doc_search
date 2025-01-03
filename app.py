@@ -1,42 +1,93 @@
+import os
 import streamlit as st
 import json
-import os
-import faiss
-from utils.embedding_utils import EmbeddingIndex
-from utils.pdf_utils import load_company_documents
+from langchain.chains import ConversationalRetrievalChain
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+from dotenv import load_dotenv
 
-# A small helper to load indexes once
-def load_company_index(company_name, embeddings_folder="embeddings"):
-    index_path = os.path.join(embeddings_folder, f"{company_name}.index")
-    texts_path = os.path.join(embeddings_folder, f"{company_name}_texts.txt")
+# Load environment variables (Google Gemini API key)
+load_dotenv()
 
-    if not os.path.exists(index_path) or not os.path.exists(texts_path):
-        st.error(f"Index for {company_name} not found. Please run preprocessing.")
+# A small helper to load FAISS index
+def load_faiss_index(embeddings_folder="embeddings"):
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    
+    # Debug information
+    print("Available files in embeddings folder:")
+    print(os.listdir(embeddings_folder))
+    
+    # Create a combined vectorstore
+    combined_vectorstore = None
+    
+    # Get the user's allowed companies
+    user_email = st.session_state.get("user_email", "")
+    with open("docs_config.json", "r") as f:
+        access_config = json.load(f)
+    allowed_companies = access_config.get(user_email, [])
+    print("Allowed companies:", allowed_companies)
+    
+    # Load and merge indexes for allowed companies
+    for company in allowed_companies:
+        try:
+            company_vectorstore = FAISS.load_local(
+                folder_path=embeddings_folder,
+                index_name=company,
+                embeddings=embeddings,
+                allow_dangerous_deserialization=True
+            )
+            
+            if combined_vectorstore is None:
+                combined_vectorstore = company_vectorstore
+            else:
+                combined_vectorstore.merge_from(company_vectorstore)
+                
+        except Exception as e:
+            st.warning(f"Could not load index for {company}: {str(e)}")
+            continue
+    
+    if combined_vectorstore is None:
+        raise RuntimeError("No valid indexes could be loaded")
+        
+    return combined_vectorstore.as_retriever(search_kwargs={"k": 3})
+
+# Initialize LangChain chain
+def initialize_chain():
+    try:
+        # Debug information
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            st.error("GEMINI_API_KEY not found in environment variables")
+            return None
+
+        retriever = load_faiss_index()
+        
+        # Updated to use Gemini model with error handling
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",  # Changed from gemini-1.5-pro to gemini-pro
+            google_api_key=api_key,
+            temperature=0.7
+        )
+        
+        chain = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=retriever,
+            return_source_documents=True
+        )
+        return chain
+    except Exception as e:
+        st.error(f"Error initializing chain: {str(e)}")
         return None
-
-    # Load the FAISS index
-    faiss_index = faiss.read_index(index_path)
-
-    # Load texts
-    with open(texts_path, "r", encoding="utf-8") as f:
-        doc_texts = [line.strip() for line in f.readlines()]
-
-    # Create an EmbeddingIndex object and attach the loaded FAISS index + doc_texts
-    embedding_index = EmbeddingIndex()
-    embedding_index.index = faiss_index
-    embedding_index.doc_texts = doc_texts
-
-    return embedding_index
 
 def initialize_session_state():
     if "logged_in" not in st.session_state:
         st.session_state["logged_in"] = False
     if "user_email" not in st.session_state:
         st.session_state["user_email"] = ""
-    if "accessible_indices" not in st.session_state:
-        st.session_state["accessible_indices"] = {}
+    if "chain" not in st.session_state:
+        st.session_state["chain"] = None
     if "conversation_history" not in st.session_state:
-        # We'll store a list of (user_query, system_answer)
         st.session_state["conversation_history"] = []
 
 def main():
@@ -44,7 +95,7 @@ def main():
 
     initialize_session_state()
 
-    # Loading user-access config
+    # Load user-access config
     with open("docs_config.json", "r") as f:
         access_config = json.load(f)
 
@@ -59,24 +110,39 @@ def login_form(access_config):
     email_input = st.text_input("Enter your email")
     if st.button("Login"):
         if email_input in access_config:
-            # Set session state
-            st.session_state["logged_in"] = True
-            st.session_state["user_email"] = email_input
+            try:
+                # Set session state
+                st.session_state["logged_in"] = True
+                st.session_state["user_email"] = email_input
 
-            # Based on the user's access, load the relevant indices
-            companies_allowed = access_config[email_input]
-            st.session_state["accessible_indices"] = {}
-            for comp in companies_allowed:
-                embedding_index = load_company_index(comp)
-                if embedding_index:
-                    st.session_state["accessible_indices"][comp] = embedding_index
-            
-            st.success(f"Logged in as {email_input}. Access to: {companies_allowed}")
+                # Initialize LangChain chain with error handling
+                chain = initialize_chain()
+                if chain is not None:
+                    st.session_state["chain"] = chain
+                    st.success(f"Logged in as {email_input}. Access configured.")
+                    st.rerun()  # Force a rerun to refresh the page
+                else:
+                    st.error("Failed to initialize chain. Please check your API key and try again.")
+                    st.session_state["logged_in"] = False
+                    
+            except Exception as e:
+                st.error(f"Error during login: {str(e)}")
+                st.session_state["logged_in"] = False
         else:
             st.error("Invalid email or no access configured.")
 
 def show_search_interface():
     st.subheader("Conversational Q&A")
+    
+    # Check if chain is properly initialized
+    if st.session_state.get("chain") is None:
+        st.error("Chain is not initialized. Please log out and log in again.")
+        if st.button("Logout"):
+            for key in st.session_state.keys():
+                del st.session_state[key]
+            st.rerun()
+        return
+        
     user_query = st.text_input("Your question:")
     if st.button("Ask"):
         if user_query.strip() == "":
@@ -93,21 +159,14 @@ def show_search_interface():
             st.write("---")
 
 def handle_user_query(user_query):
-    # For a multi-document search, we combine results from all accessible indices
-    all_excerpts = []
-    for comp, emb_index in st.session_state["accessible_indices"].items():
-        results = emb_index.search(user_query, top_k=2)  # top_k is adjustable
-        all_excerpts.extend(results)
-
-    # For a “true” conversational answer, you’d pass the entire conversation history +
-    # the retrieved excerpts into an LLM. Here, we’ll just show the top excerpt or
-    # combine them naively.
-    if not all_excerpts:
-        answer = "No relevant information found in authorized documents."
-    else:
-        # For simplicity, we just pick the first excerpt as the "best" answer.
-        # In a real system, you'd refine or rank them, or feed into an LLM to generate a summary.
-        answer = all_excerpts[0]
+    chain = st.session_state["chain"]
+    if not chain:
+        st.error("Chain is not initialized. Please log in again.")
+        return
+    
+    # Run the query through LangChain
+    result = chain({"question": user_query, "chat_history": st.session_state["conversation_history"]})
+    answer = result["answer"]
     
     # Save to conversation history
     st.session_state["conversation_history"].append((user_query, answer))

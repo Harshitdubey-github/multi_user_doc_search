@@ -5,5 +5,5 @@ PyPDF2
 pdfplumber
 numpy
 langchain
-google-generativeai
+langchain-google-genai
 python-dotenv

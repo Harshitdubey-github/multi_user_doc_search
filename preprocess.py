@@ -1,7 +1,9 @@
 import os
 from utils.pdf_utils import load_company_documents
-from utils.embedding_utils import EmbeddingIndex, chunk_text
+from utils.embedding_utils import chunk_text
 import faiss
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
 
 DATA_FOLDER = "data"
 EMBEDDINGS_FOLDER = "embeddings"
@@ -22,18 +24,14 @@ def build_and_save_index_for_company(company_name, pdf_file):
     # Log chunk details
     print(f"Chunks for {company_name}: {len(chunks)} chunks created.")
 
-    # Build index
-    embedding_index = EmbeddingIndex()
-    embedding_index.build_index(chunks)
-
-    # Save FAISS index
-    faiss_index_path = os.path.join(EMBEDDINGS_FOLDER, f"{company_name}.index")
-    faiss.write_index(embedding_index.index, faiss_index_path)
-
-    # Save doc_texts as well (for retrieval)
-    with open(os.path.join(EMBEDDINGS_FOLDER, f"{company_name}_texts.txt"), "w", encoding="utf-8") as f:
-        for chunk in chunks:
-            f.write(chunk.replace("\n", " ") + "\n")
+    # Initialize embeddings
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    
+    # Create and save FAISS index using LangChain
+    vectorstore = FAISS.from_texts(chunks, embeddings)
+    vectorstore.save_local(EMBEDDINGS_FOLDER, index_name=company_name)
+    
+    print(f"Successfully saved index for {company_name}")
 
 def main():
     os.makedirs(EMBEDDINGS_FOLDER, exist_ok=True)
